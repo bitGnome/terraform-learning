@@ -1,7 +1,3 @@
-provider "aws" {
-  region = "us-west-1"
-}
-
 data "aws_availability_zones" "all" {}
 
 variable "server_port" {
@@ -10,7 +6,7 @@ variable "server_port" {
 }
 
 resource "aws_security_group" "instance" {
-  name = "terraform-example-instance"
+  name = "${var.cluster_name}"
 
   ingress {
     from_port   = "${var.server_port}"
@@ -30,14 +26,9 @@ output "elb_dns_name" {
 
 resource "aws_launch_configuration" "example" {
   image_id = "get_ami"
-  instance_type = "t2.micro"
+  instance_type = "${var.instance_type}"
   security_groups = ["${aws_security_group.instance.id}"]
-
-  user_data = <<-EOF
-              #!/bin/bash
-              echo "Hello, World" > index.html
-              nohup busybox httpd -f -p "${var.server_port}" &
-              EOF
+  user_data = "${data.template_file.user_data.rendered}"
 
   lifecycle {
     create_before_destroy = true
@@ -51,18 +42,18 @@ resource "aws_autoscaling_group" "example" {
   load_balancers = ["${aws_elb.example.name}"]
   health_check_type = "ELB"
 
-  max_size = 2
-  min_size = 10
+  max_size = "${var.max_size}"
+  min_size = "${var.min_size}"
 
   tag {
     key = "Name"
-    value = "terraform-asg-example"
+    value = "${var.cluster_name}"
     propagate_at_launch = true
   }
 }
 
 resource "aws_security_group" "elb" {
-  name = "terraform-example-elb"
+  name = "${var.cluster_name}-elb"
 
   ingress {
     from_port = 80
@@ -80,7 +71,7 @@ resource "aws_security_group" "elb" {
 }
 
 resource "aws_elb" "example" {
-  name = "terraform-asg-example"
+  name = "${var.cluster_name}-example"
   availability_zones = ["${data.aws_availability_zones.all.names}"]
   security_groups = ["${aws_security_group.elb.id}"]
 
@@ -97,5 +88,15 @@ resource "aws_elb" "example" {
     timeout = 3
     interval = 30
     target = "HTTP:${var.server_port}/"
+  }
+}
+
+data "template_file" "user_data" {
+  template = "${file("user-data.sh")}"
+
+  vars {
+    server_port = "${var.server_port}"
+    db_address = "${data.terraform_remote_state.db.address}"
+    db_port = "${data.terraform_remote_state.db.port}"
   }
 }
